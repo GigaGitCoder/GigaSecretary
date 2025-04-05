@@ -139,6 +139,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
 
     try {
+      // Очищаем данные о папках перед выходом
+      final prefs = await SharedPreferences.getInstance();
+      final keys = prefs.getKeys();
+      for (final key in keys) {
+        if (key.startsWith('googleDriveFolderId_')) {
+          await prefs.remove(key);
+        }
+      }
+
       await widget.googleSignIn.signOut();
       if (mounted) {
         setState(() {
@@ -171,24 +180,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return;
     }
 
-    await widget.driveService.initialize();
-    if (widget.driveService.driveApi == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Ошибка доступа к Google Drive')),
-      );
-      return;
-    }
-
+    print('Текущий пользователь: ${_currentUser!.email}');
+    
     try {
+      await widget.driveService.initialize();
+      if (widget.driveService.driveApi == null) {
+        print('DriveApi не инициализирован');
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Ошибка доступа к Google Drive')),
+        );
+        return;
+      }
+
+      print('Запрашиваем список папок...');
       final files = await widget.driveService.driveApi!.files.list(
-        q: "mimeType='application/vnd.google-apps.folder' and trashed=false",
+        q: "mimeType='application/vnd.google-apps.folder' and trashed=false and 'me' in owners",
         spaces: 'drive',
-        $fields: 'files(id,name)',
+        $fields: 'files(id,name,parents,mimeType)',
+        orderBy: 'name',
       );
 
+      print('Получено папок: ${files.files?.length ?? 0}');
+      if (files.files != null) {
+        print('Список папок:');
+        for (var folder in files.files!) {
+          print('- ${folder.name} (${folder.id}) [${folder.mimeType}]');
+          if (folder.parents != null) {
+            print('  Родительские папки: ${folder.parents!.join(", ")}');
+          }
+        }
+      }
       final folders = files.files ?? [];
 
       if (folders.isEmpty) {
+        print('Папки не найдены');
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Папки не найдены')),
@@ -199,6 +224,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       if (!mounted) return;
 
+      print('Отображаем диалог выбора папки');
       await showDialog(
         context: context,
         builder: (context) => AlertDialog(
@@ -222,6 +248,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onTap: () {
                     Navigator.pop(context);
                     if (folder.id != null) {
+                      print('Выбрана папка: ${folder.name} (${folder.id})');
                       _saveFolder(folder.id!);
                       setState(() {
                         _selectedFolderName = folder.name;
@@ -236,7 +263,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       );
     } catch (e) {
-      print('Error fetching folders: $e');
+      print('Ошибка при получении папок: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Ошибка при получении папок: $e')),

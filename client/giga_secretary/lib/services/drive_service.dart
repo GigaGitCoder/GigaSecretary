@@ -6,24 +6,56 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 
 class DriveService {
-  static const String _folderIdKey = 'googleDriveFolderId';
+  static const String _folderIdKeyPrefix = 'googleDriveFolderId_';
   final GoogleSignIn _googleSignIn;
   drive.DriveApi? _driveApi;
   bool _isInitializing = false;
 
-  DriveService(this._googleSignIn);
+  DriveService(this._googleSignIn) {
+    // Добавляем необходимые области доступа
+    _googleSignIn.scopes.addAll([
+      'https://www.googleapis.com/auth/drive.file',
+      'https://www.googleapis.com/auth/drive.readonly',
+      'https://www.googleapis.com/auth/drive.metadata.readonly',
+    ]);
+  }
 
   drive.DriveApi? get driveApi => _driveApi;
 
+  String _getFolderIdKey() {
+    final email = _googleSignIn.currentUser?.email;
+    if (email == null) {
+      throw Exception('Пользователь не авторизован');
+    }
+    return _folderIdKeyPrefix + email;
+  }
+
   Future<void> initialize() async {
-    if (_driveApi != null || _isInitializing) return;
+    if (_isInitializing) {
+      print('Инициализация уже выполняется');
+      return;
+    }
     
     _isInitializing = true;
     try {
+      print('Начало инициализации Drive API');
+      print('Текущий пользователь: ${_googleSignIn.currentUser?.email}');
+      
+      // Сбрасываем текущий _driveApi
+      _driveApi = null;
+      
       final account = await _googleSignIn.signInSilently() ?? await _googleSignIn.signIn();
       if (account != null) {
+        print('Пользователь авторизован: ${account.email}');
+        print('Области доступа: ${_googleSignIn.scopes}');
         await _initializeDriveApi(account);
+      } else {
+        print('Пользователь не авторизован');
       }
+    } catch (e) {
+      print('Ошибка при инициализации Drive API: $e');
+      _driveApi = null;
+      rethrow;
     } finally {
       _isInitializing = false;
     }
@@ -31,11 +63,15 @@ class DriveService {
 
   Future<void> _initializeDriveApi(GoogleSignInAccount account) async {
     try {
+      print('Получение токена доступа...');
       final auth = await account.authentication;
       if (auth.accessToken == null) {
+        print('Не удалось получить токен доступа');
         throw Exception('Не удалось получить токен доступа');
       }
+      print('Токен доступа получен успешно');
 
+      print('Создание клиента Drive API...');
       final credentials = AccessCredentials(
         AccessToken(
           'Bearer',
@@ -48,20 +84,22 @@ class DriveService {
 
       final client = authenticatedClient(http.Client(), credentials);
       _driveApi = drive.DriveApi(client);
+      print('Drive API успешно инициализирован для пользователя ${account.email}');
     } catch (e) {
-      print('Error initializing Drive API: $e');
+      print('Ошибка при инициализации Drive API: $e');
+      _driveApi = null;
       rethrow;
     }
   }
 
   Future<String?> getSelectedFolderId() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_folderIdKey);
+    return prefs.getString(_getFolderIdKey());
   }
 
   Future<void> setSelectedFolderId(String folderId) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_folderIdKey, folderId);
+    await prefs.setString(_getFolderIdKey(), folderId);
   }
 
   Future<String?> uploadFile(
