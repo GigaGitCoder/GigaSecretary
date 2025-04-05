@@ -1,24 +1,47 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
-class WelcomeScreen extends StatelessWidget {
+class WelcomeScreen extends StatefulWidget {
   const WelcomeScreen({super.key});
+
+  @override
+  State<WelcomeScreen> createState() => _WelcomeScreenState();
+}
+
+class _WelcomeScreenState extends State<WelcomeScreen> {
+  @override
+  void initState() {
+    super.initState();
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) {
+        Navigator.pushReplacementNamed(context, '/list');
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0E3254),
+      backgroundColor: const Color(0xFF0D162D),
       body: Center(
-        child: ElevatedButton(
-          child: const Text('Войти в GigaSecretary'),
-          onPressed: () {
-            Navigator.pushReplacementNamed(context, '/list');
-          },
-          style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFF3B47AE), // исправлено на backgroundColor
-            foregroundColor: Colors.white, // исправлено на foregroundColor
-            padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 15),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            SvgPicture.asset(
+              'lib/assets/GSLOGO.svg',
+              width: 200,
+              height: 200,
+            ),
+            const SizedBox(height: 24),
+            const Text(
+              'GigaSecretary',
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
+            ),
+          ],
         ),
       ),
     );

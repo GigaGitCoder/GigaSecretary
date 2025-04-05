@@ -1,167 +1,377 @@
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:audio_session/audio_session.dart';
+import '../models/conversation.dart';
+import '../services/conversation_service.dart';
+import '../services/drive_service.dart';
+import '../widgets/audio_progress_bar.dart';
 
-class ViewRecordingScreen extends StatefulWidget {
-  const ViewRecordingScreen({super.key});
+class ConversationDetailScreen extends StatefulWidget {
+  final Conversation conversation;
+  final DriveService driveService;
+
+  const ConversationDetailScreen({
+    Key? key,
+    required this.conversation,
+    required this.driveService,
+  }) : super(key: key);
 
   @override
-  _ViewRecordingScreenState createState() => _ViewRecordingScreenState();
+  State<ConversationDetailScreen> createState() => _ConversationDetailScreenState();
 }
 
-class _ViewRecordingScreenState extends State<ViewRecordingScreen> {
-  late AudioPlayer _player;
+class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
+  AudioPlayer? _player;
+  bool _isLoading = false;
+  String? _errorMessage;
+  bool _isPlaying = false;
+  Duration _position = Duration.zero;
+  Duration _duration = Duration.zero;
 
   @override
   void initState() {
     super.initState();
-    _init();
+    _initAudioPlayer();
   }
 
-  Future<void> _init() async {
-    _player = AudioPlayer();
-    final session = await AudioSession.instance;
-    await session.configure(AudioSessionConfiguration.music());
-    await _player.setUrl('https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3');
+  Future<void> _initAudioPlayer() async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final url = await widget.driveService.getFileDownloadUrl(widget.conversation.fileId);
+      if (url == null) {
+        throw Exception('Не удалось получить URL файла');
+      }
+
+      print('Audio URL: $url'); // Для отладки
+
+      final session = await AudioSession.instance;
+      await session.configure(const AudioSessionConfiguration.speech());
+
+      _player = AudioPlayer();
+      
+      try {
+        // Получаем токен авторизации
+        final authHeaders = await widget.driveService.getAuthHeaders();
+        if (authHeaders == null) {
+          throw Exception('Не удалось получить заголовки авторизации');
+        }
+
+        // Устанавливаем источник аудио с заголовками авторизации
+        await _player?.setAudioSource(
+          AudioSource.uri(
+            Uri.parse(url),
+            headers: {
+              ...authHeaders,
+              'Accept': '*/*',
+              'Range': 'bytes=0-',
+            },
+          ),
+          initialPosition: Duration.zero,
+        );
+
+        // Проверяем, что аудио успешно загружено
+        final duration = await _player?.duration;
+        if (duration == null) {
+          throw Exception('Не удалось загрузить аудио файл');
+        }
+      } catch (e) {
+        print('Error setting URL: $e');
+        throw Exception('Не удалось загрузить аудио файл. Проверьте подключение к интернету и попробуйте снова.');
+      }
+
+      _player?.positionStream.listen((position) {
+        if (mounted) {
+          setState(() => _position = position);
+        }
+      });
+
+      _player?.durationStream.listen((duration) {
+        if (mounted && duration != null) {
+          setState(() => _duration = duration);
+        }
+      });
+
+      _player?.playerStateStream.listen((state) {
+        if (mounted) {
+          setState(() => _isPlaying = state.playing);
+        }
+      }, onError: (error) {
+        print('Player state error: $error');
+        if (mounted) {
+          setState(() {
+            _errorMessage = 'Ошибка воспроизведения. Попробуйте перезагрузить аудио.';
+          });
+        }
+      });
+
+    } catch (e) {
+      print('Audio player error: $e');
+      setState(() => _errorMessage = e.toString());
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
   }
 
   @override
   void dispose() {
-    _player.dispose();
+    _player?.dispose();
     super.dispose();
+  }
+
+  String _formatDuration(Duration duration) {
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    final hours = twoDigits(duration.inHours);
+    final minutes = twoDigits(duration.inMinutes.remainder(60));
+    final seconds = twoDigits(duration.inSeconds.remainder(60));
+    return duration.inHours > 0 ? '$hours:$minutes:$seconds' : '$minutes:$seconds';
+  }
+
+  String _formatDateTime(DateTime dateTime) {
+    final day = dateTime.day.toString().padLeft(2, '0');
+    final month = dateTime.month.toString().padLeft(2, '0');
+    final year = dateTime.year;
+    final hour = dateTime.hour.toString().padLeft(2, '0');
+    final minute = dateTime.minute.toString().padLeft(2, '0');
+    return '$day.$month.$year $hour:$minute';
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Color(0xFF0D162D),
+      backgroundColor: const Color(0xFF0D162D),
       appBar: AppBar(
-        backgroundColor: Color(0xFF1A2157),
-        title: const Text('Просмотр беседы', style: TextStyle(color: Colors.white)),
-        iconTheme: const IconThemeData(color: Colors.white),
+        backgroundColor: const Color(0xFF1A2157),
+        title: const Text('Просмотр записи', style: TextStyle(color: Colors.white)),
         elevation: 0,
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _buildAudioPlayer(),
-
-            const SizedBox(height: 20),
-
-            _buildCard('Краткий пересказ', 'Пересказ беседы будет здесь...'),
-            const SizedBox(height: 16),
-            _buildCard('Обязанности', 'Список обязанностей...'),
-            const SizedBox(height: 16),
-            _buildCard('Текст беседы', 'Полный текст беседы...'),
-
-            const Spacer(),
-
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                _buildButton(Icons.arrow_back, 'Назад', () => Navigator.pop(context)),
-                _buildButton(Icons.edit, 'Роли', () {
-                  Navigator.pushNamed(context, '/roles');
-                }),
-                _buildButton(Icons.delete, 'Удалить', () {
-                  // удалить
-                }),
-              ],
+            Card(
+              color: const Color(0xFF1A2157),
+              child: Padding(
+                padding: const EdgeInsets.all(12.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Text(
+                      widget.conversation.title,
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Создано: ${_formatDateTime(widget.conversation.createdAt)}',
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildAudioPlayer() {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Color(0xFF1A2157),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: StreamBuilder<PlayerState>(
-        stream: _player.playerStateStream,
-        builder: (context, snapshot) {
-          final playing = snapshot.data?.playing ?? false;
-          return Column(
-            children: [
-              Row(
-                children: [
-                  IconButton(
-                    icon: Icon(
-                      playing ? Icons.pause_circle_filled : Icons.play_circle_fill,
-                      size: 40,
-                      color: Color(0xFF3B47AE),
+            const SizedBox(height: 8),
+            Card(
+              color: const Color(0xFF1A2157),
+              child: Padding(
+                padding: const EdgeInsets.all(12.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Аудиозапись',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
-                    onPressed: () {
-                      if (playing) {
-                        _player.pause();
-                      } else {
-                        _player.play();
-                      }
-                    },
+                    const SizedBox(height: 12),
+                    if (_isLoading)
+                      const Center(
+                        child: Column(
+                          children: [
+                            CircularProgressIndicator(
+                              valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
+                            ),
+                            SizedBox(height: 16),
+                            Text(
+                              'Загрузка аудио...',
+                              style: TextStyle(color: Colors.white70),
+                            ),
+                          ],
+                        ),
+                      )
+                    else if (_errorMessage != null)
+                      Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.error_outline,
+                              color: Colors.red,
+                              size: 48,
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              _errorMessage!,
+                              style: const TextStyle(color: Colors.red),
+                              textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: 16),
+                            ElevatedButton.icon(
+                              onPressed: _initAudioPlayer,
+                              icon: const Icon(Icons.refresh),
+                              label: const Text('Повторить попытку'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.blue,
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
+                    else
+                      Column(
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                _formatDuration(_position),
+                                style: const TextStyle(color: Colors.white70),
+                              ),
+                              Text(
+                                _formatDuration(_duration),
+                                style: const TextStyle(color: Colors.white70),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          AudioProgressBar(
+                            progress: _position,
+                            total: _duration,
+                            onSeek: (position) {
+                              _player?.seek(position);
+                            },
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              IconButton(
+                                icon: Icon(
+                                  _isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
+                                  color: Colors.blue,
+                                  size: 48,
+                                ),
+                                onPressed: () {
+                                  if (_isPlaying) {
+                                    _player?.pause();
+                                  } else {
+                                    _player?.play();
+                                  }
+                                },
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            if (widget.conversation.summary != null) ...[
+              const SizedBox(height: 8),
+              Card(
+                color: const Color(0xFF1A2157),
+                child: Padding(
+                  padding: const EdgeInsets.all(12.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Краткое содержание',
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        widget.conversation.summary!,
+                        style: const TextStyle(color: Colors.white70),
+                      ),
+                    ],
                   ),
-                  Expanded(
-                    child: StreamBuilder<Duration>(
-                      stream: _player.positionStream,
-                      builder: (context, snapshot) {
-                        final position = snapshot.data ?? Duration.zero;
-                        final total = _player.duration ?? Duration(seconds: 1);
-                        return Slider(
-                          value: position.inMilliseconds.toDouble().clamp(0, total.inMilliseconds.toDouble()),
-                          max: total.inMilliseconds.toDouble(),
-                          onChanged: (value) {
-                            _player.seek(Duration(milliseconds: value.toInt()));
-                          },
-                          activeColor: Color(0xFF3B47AE),
-                          inactiveColor: Colors.white24,
-                        );
-                      },
-                    ),
-                  ),
-                ],
+                ),
               ),
             ],
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildCard(String title, String content) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Color(0xFF1A2157),
-        borderRadius: BorderRadius.circular(16),
-      ),
-      width: double.infinity,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(title,
-              style: const TextStyle(
-                  fontSize: 18, color: Colors.white70, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 8),
-          Text(content, style: const TextStyle(color: Colors.white)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildButton(IconData icon, String label, VoidCallback onPressed) {
-    return ElevatedButton.icon(
-      onPressed: onPressed,
-      icon: Icon(icon, size: 20),
-      label: Text(label),
-      style: ElevatedButton.styleFrom(
-        backgroundColor: Color(0xFF3B47AE),
-        foregroundColor: Colors.white,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            if (widget.conversation.responsibilities != null) ...[
+              const SizedBox(height: 8),
+              Card(
+                color: const Color(0xFF1A2157),
+                child: Padding(
+                  padding: const EdgeInsets.all(12.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Обязанности',
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        widget.conversation.responsibilities!,
+                        style: const TextStyle(color: Colors.white70),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+            if (widget.conversation.transcript != null) ...[
+              const SizedBox(height: 8),
+              Card(
+                color: const Color(0xFF1A2157),
+                child: Padding(
+                  padding: const EdgeInsets.all(12.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Расшифровка',
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        widget.conversation.transcript!,
+                        style: const TextStyle(color: Colors.white70),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
