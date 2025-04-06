@@ -6,7 +6,11 @@
     <h1>GigaSecretary</h1>  
 
 
-![Contributors](https://img.shields.io/github/contributors/GigaGitCoder/GigaSecretary) ![Issues](https://img.shields.io/github/issues/GigaGitCoder/GigaSecretary) ![MIT License](https://img.shields.io/github/license/GigaGitCoder/GigaSecretary) ![Forks](https://img.shields.io/github/forks/GigaGitCoder/GigaSecretary) ![Stars](https://img.shields.io/github/stars/GigaGitCoder/GigaSecretary)  
+![Contributors](https://img.shields.io/github/contributors/GigaGitCoder/GigaSecretary)
+![Issues](https://img.shields.io/github/issues/GigaGitCoder/GigaSecretary)
+![MIT License](https://img.shields.io/github/license/GigaGitCoder/GigaSecretary)
+![Forks](https://img.shields.io/github/forks/GigaGitCoder/GigaSecretary)
+![Stars](https://img.shields.io/github/stars/GigaGitCoder/GigaSecretary)  
 
 </div>  
 
@@ -49,11 +53,16 @@ HF_TOKEN=ваш_токен_от_huggingface
 - [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0)
 - [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)
 
-5. Настройте доступ к Google API:
-- Создайте новый проект в [Google Cloud Console](https://console.cloud.google.com/).
-- Включите **Google Drive API**.
-- Настройте **OAuth 2.0 Client ID**.
-- Скачайте `credentials.json` и поместите в директорию `android/app`.
+5. Настройте доступ к Google API: 
+- **Создайте новый проект в [Google Cloud Console](https://console.cloud.google.com/)**.  
+- **Включите Google Drive API**.  
+- **Настройте OAuth 2.0 Client ID**:  
+   - Укажите **имя пакета** (например, `com.example.myapp`).  
+   - Получите **SHA-1 отпечаток** с помощью следующей команды:  
+     ```bash  
+     keytool -list -v -alias androiddebugkey -keystore ~/.android/debug.keystore  
+     ```  
+- **Скачайте `credentials.json`** и поместите его в директорию `android/app`.  
 
 6. Найдите IP-адрес вашего ПК (если нет белого IP) и укажите его:
 - В файле `api.py`, последние строки:
