@@ -9,11 +9,13 @@ import 'package:video_player/video_player.dart';
 
 class ConversationDetailScreen extends StatefulWidget {
   final Conversation conversation;
+  final ConversationService conversationService;
   final DriveService driveService;
 
   const ConversationDetailScreen({
     Key? key,
     required this.conversation,
+    required this.conversationService,
     required this.driveService,
   }) : super(key: key);
 
@@ -32,6 +34,8 @@ class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
   bool _isVideoPlaying = false;
   bool _isSeeking = false;
   bool _isAudioSeeking = false;
+  Map<String, dynamic>? _analysis;
+  bool _isAnalysisLoading = false;
 
   @override
   void initState() {
@@ -40,6 +44,7 @@ class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
     if (widget.conversation.isVideo) {
       _initVideoPlayer();
     }
+    _loadAnalysis();
   }
 
   Future<void> _initAudioPlayer() async {
@@ -265,6 +270,25 @@ class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
     }
   }
 
+  Future<void> _loadAnalysis() async {
+    setState(() {
+      _isAnalysisLoading = true;
+    });
+
+    try {
+      final analysis = await widget.conversationService.getAnalysis(widget.conversation.fileId);
+      setState(() {
+        _analysis = analysis;
+      });
+    } catch (e) {
+      print('Error loading analysis: $e');
+    } finally {
+      setState(() {
+        _isAnalysisLoading = false;
+      });
+    }
+  }
+
   @override
   void dispose() {
     _player?.dispose();
@@ -286,6 +310,131 @@ class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
   String _formatDateTime(DateTime dateTime) {
     final localTime = dateTime.toLocal();
     return '${localTime.day.toString().padLeft(2, '0')}.${localTime.month.toString().padLeft(2, '0')}.${localTime.year} ${localTime.hour.toString().padLeft(2, '0')}:${localTime.minute.toString().padLeft(2, '0')}';
+  }
+
+  Widget _buildAnalysisSection() {
+    if (_isAnalysisLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_analysis == null) {
+      return const Center(
+        child: Text(
+          'Анализ недоступен',
+          style: TextStyle(color: Colors.white70),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (_analysis!['speakers'] != null && _analysis!['speakers'].isNotEmpty) ...[
+          const Text(
+            'Спикеры',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 8),
+          ..._analysis!['speakers'].map<Widget>((speaker) => Card(
+            color: const Color(0xFF1A2157),
+            child: Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Спикер ${speaker['speaker']}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    speaker['text'],
+                    style: const TextStyle(color: Colors.white70),
+                  ),
+                ],
+              ),
+            ),
+          )).toList(),
+          const SizedBox(height: 16),
+        ],
+        if (_analysis!['events'] != null && _analysis!['events'].isNotEmpty) ...[
+          const Text(
+            'События',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 8),
+          ..._analysis!['events'].map<Widget>((event) => Card(
+            color: const Color(0xFF1A2157),
+            child: Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    event['date'],
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    event['event'],
+                    style: const TextStyle(color: Colors.white70),
+                  ),
+                ],
+              ),
+            ),
+          )).toList(),
+          const SizedBox(height: 16),
+        ],
+        if (_analysis!['duties'] != null && _analysis!['duties'].isNotEmpty) ...[
+          const Text(
+            'Обязанности',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 8),
+          ..._analysis!['duties'].map<Widget>((duty) => Card(
+            color: const Color(0xFF1A2157),
+            child: Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Спикер ${duty['speaker']}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    duty['duty'],
+                    style: const TextStyle(color: Colors.white70),
+                  ),
+                ],
+              ),
+            ),
+          )).toList(),
+        ],
+      ],
+    );
   }
 
   @override
@@ -448,6 +597,28 @@ class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
                   ),
                 ),
               ),
+              const SizedBox(height: 16),
+              Card(
+                color: const Color(0xFF1A2157),
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Анализ записи',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      _buildAnalysisSection(),
+                    ],
+                  ),
+                ),
+              ),
             ],
           ),
         ),
@@ -456,26 +627,29 @@ class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
   }
 
   Widget _buildInfoRow(String label, String value) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: 100,
-          child: Text(
-            label,
-            style: const TextStyle(
-              color: Colors.white70,
-              fontWeight: FontWeight.bold,
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 100,
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontWeight: FontWeight.bold,
+              ),
             ),
           ),
-        ),
-        Expanded(
-          child: Text(
-            value,
-            style: const TextStyle(color: Colors.white70),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(color: Colors.white70),
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

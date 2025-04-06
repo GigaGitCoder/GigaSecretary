@@ -1,13 +1,13 @@
 import 'dart:io';
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:just_audio/just_audio.dart';
-import 'package:audio_session/audio_session.dart';
-import '../models/conversation.dart';
 import '../services/conversation_service.dart';
 import '../services/drive_service.dart';
 import '../widgets/audio_progress_bar.dart';
+import 'package:path/path.dart' as path;
 
 class AddConversationScreen extends StatefulWidget {
   final DriveService driveService;
@@ -83,7 +83,7 @@ class _AddConversationScreenState extends State<AddConversationScreen> {
         setState(() => _isTitleAvailable = isAvailable);
       }
     } catch (e) {
-      print('Error checking title: $e');
+      debugPrint('Error checking title: $e');
     } finally {
       if (mounted) {
         setState(() => _isCheckingTitle = false);
@@ -121,7 +121,7 @@ class _AddConversationScreenState extends State<AddConversationScreen> {
       final player = AudioPlayer();
       try {
         await player.setFilePath(file.path);
-        final duration = await player.duration;
+        final duration = player.duration;
         
         if (mounted) {
           setState(() => _selectedFileDuration = duration);
@@ -160,25 +160,44 @@ class _AddConversationScreenState extends State<AddConversationScreen> {
       _uploadProgress = 0;
     });
 
+    String? fileId;
     try {
-      await widget.conversationService.saveConversation(
+      // Сначала сохраняем файл на Google Drive
+      fileId = await widget.driveService.uploadFile(
         _selectedFile!,
-        _titleController.text,
-        onProgress: (progress) {
-          if (mounted && !_isCancelled) {
-            setState(() {
-              _uploadProgress = progress;
-              _statusMessage = 'Загрузка файла: ${(progress * 100).toStringAsFixed(1)}%\n'
-                  'Размер: ${_formatFileSize(_selectedFileSize!)}';
-            });
-          }
-        },
+        _titleController.text + path.extension(_selectedFile!.path),
+        fileSize: _selectedFileSize,
       );
+
+      if (fileId == null) {
+        throw Exception('Не удалось загрузить файл');
+      }
 
       if (_isCancelled) return;
 
-      if (mounted) {
-        Navigator.pop(context, true);
+      // После успешной загрузки файла, отправляем его на анализ
+      setState(() {
+        _statusMessage = 'Обработка файла...';
+      });
+
+      final result = await widget.conversationService.processAudio(
+        fileId,
+        _selectedFileName!,
+      );
+
+      if (result != null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Файл успешно обработан')),
+          );
+          Navigator.pop(context, true);
+        }
+      } else {
+        setState(() {
+          _errorMessage = 'Ошибка при обработке файла. Проверьте подключение к серверу';
+          _isUploading = false;
+          _statusMessage = null;
+        });
       }
     } catch (e) {
       if (mounted && !_isCancelled) {
@@ -193,8 +212,9 @@ class _AddConversationScreenState extends State<AddConversationScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return WillPopScope(
-      onWillPop: () async {
+    return PopScope(
+      canPop: !_isUploading,
+      onPopInvoked: (didPop) async {
         if (_isUploading) {
           final shouldCancel = await showDialog<bool>(
             context: context,
@@ -226,9 +246,7 @@ class _AddConversationScreenState extends State<AddConversationScreen> {
           if (shouldCancel == true) {
             _resetUpload();
           }
-          return false;
         }
-        return true;
       },
       child: Scaffold(
       backgroundColor: const Color(0xFF0D162D),

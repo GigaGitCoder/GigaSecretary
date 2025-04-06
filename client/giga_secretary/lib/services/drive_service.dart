@@ -1,15 +1,18 @@
 import 'dart:io';
+import 'dart:async';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:googleapis_auth/auth_io.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
+import 'package:flutter/foundation.dart';
 
 class DriveService {
   static const String _folderIdKeyPrefix = 'googleDriveFolderId_';
   final GoogleSignIn _googleSignIn;
   drive.DriveApi? _driveApi;
   bool _isInitializing = false;
+  Completer<void>? _initCompleter;
 
   DriveService(this._googleSignIn) {
     // Добавляем необходимые области доступа
@@ -31,18 +34,25 @@ class DriveService {
   }
 
   Future<void> initialize() async {
-    if (_isInitializing) {
-      print('Инициализация уже выполняется');
+    // Если уже инициализирован, возвращаем сразу
+    if (_driveApi != null) {
       return;
+    }
+
+    // Если инициализация уже идет, ждем её завершения
+    if (_isInitializing) {
+      if (_initCompleter != null) {
+        await _initCompleter!.future;
+        return;
+      }
     }
     
     _isInitializing = true;
+    _initCompleter = Completer<void>();
+    
     try {
       print('Начало инициализации Drive API');
       print('Текущий пользователь: ${_googleSignIn.currentUser?.email}');
-      
-      // Сбрасываем текущий _driveApi
-      _driveApi = null;
       
       final account = await _googleSignIn.signInSilently() ?? await _googleSignIn.signIn();
       if (account != null) {
@@ -51,13 +61,18 @@ class DriveService {
         await _initializeDriveApi(account);
       } else {
         print('Пользователь не авторизован');
+        throw Exception('Пожалуйста, войдите в аккаунт Google в настройках');
       }
+      
+      _initCompleter?.complete();
     } catch (e) {
       print('Ошибка при инициализации Drive API: $e');
       _driveApi = null;
+      _initCompleter?.completeError(e);
       rethrow;
     } finally {
       _isInitializing = false;
+      _initCompleter = null;
     }
   }
 
@@ -103,7 +118,7 @@ class DriveService {
   }
 
   Future<String?> uploadFile(
-    File file,
+    File? file,
     String fileName, {
     Stream<List<int>>? fileStream,
     int? fileSize,
@@ -132,18 +147,18 @@ class DriveService {
         ..parents = [folderId];
 
       // Проверяем размер файла
-      final actualFileSize = fileSize ?? await file.length();
+      final actualFileSize = fileSize ?? (file != null ? await file.length() : 0);
       if (actualFileSize <= 0) {
         throw Exception('Файл пуст');
       }
 
-      // Проверяем доступность файла для чтения
-      if (!await file.exists()) {
+      // Проверяем доступность файла для чтения, только если он предоставлен
+      if (file != null && !await file.exists()) {
         throw Exception('Файл не найден');
       }
 
       final media = drive.Media(
-        fileStream ?? file.openRead(),
+        fileStream ?? file!.openRead(),
         actualFileSize,
       );
 

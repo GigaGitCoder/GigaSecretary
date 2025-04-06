@@ -48,6 +48,7 @@ class MainApp extends StatelessWidget {
                   );
                   return ConversationDetailScreen(
                     conversation: conversation,
+                    conversationService: conversationService,
                     driveService: driveService,
                   );
                 }

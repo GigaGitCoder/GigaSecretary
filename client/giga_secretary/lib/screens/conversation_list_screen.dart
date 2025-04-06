@@ -301,6 +301,7 @@ class _ConversationListScreenState extends State<ConversationListScreen> {
                   MaterialPageRoute(
                     builder: (context) => ConversationDetailScreen(
                       conversation: conversation,
+                      conversationService: widget.conversationService,
                       driveService: widget.driveService,
                     ),
                   ),
