@@ -5,6 +5,7 @@ import '../models/conversation.dart';
 import '../services/conversation_service.dart';
 import '../services/drive_service.dart';
 import '../widgets/audio_progress_bar.dart';
+import 'package:video_player/video_player.dart';
 
 class ConversationDetailScreen extends StatefulWidget {
   final Conversation conversation;
@@ -27,14 +28,23 @@ class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
   bool _isPlaying = false;
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
+  VideoPlayerController? _controller;
+  bool _isVideoPlaying = false;
+  bool _isSeeking = false;
+  bool _isAudioSeeking = false;
 
   @override
   void initState() {
     super.initState();
     _initAudioPlayer();
+    if (widget.conversation.isVideo) {
+      _initVideoPlayer();
+    }
   }
 
   Future<void> _initAudioPlayer() async {
+    if (widget.conversation.isVideo) return;
+
     setState(() {
       _isLoading = true;
       _errorMessage = null;
@@ -46,7 +56,7 @@ class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
         throw Exception('Не удалось получить URL файла');
       }
 
-      print('Audio URL: $url'); // Для отладки
+      print('Audio URL: $url');
 
       final session = await AudioSession.instance;
       await session.configure(const AudioSessionConfiguration.speech());
@@ -54,13 +64,11 @@ class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
       _player = AudioPlayer();
       
       try {
-        // Получаем токен авторизации
         final authHeaders = await widget.driveService.getAuthHeaders();
         if (authHeaders == null) {
           throw Exception('Не удалось получить заголовки авторизации');
         }
 
-        // Устанавливаем источник аудио с заголовками авторизации
         await _player?.setAudioSource(
           AudioSource.uri(
             Uri.parse(url),
@@ -73,31 +81,49 @@ class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
           initialPosition: Duration.zero,
         );
 
-        // Проверяем, что аудио успешно загружено
+        // Получаем и проверяем длительность
         final duration = await _player?.duration;
-        if (duration == null) {
-          throw Exception('Не удалось загрузить аудио файл');
+        print('Initial duration: ${duration?.inSeconds} seconds');
+        
+        if (duration == null || duration == Duration.zero) {
+          throw Exception('Не удалось определить длительность аудио');
         }
+
+        setState(() {
+          _duration = duration;
+        });
       } catch (e) {
         print('Error setting URL: $e');
         throw Exception('Не удалось загрузить аудио файл. Проверьте подключение к интернету и попробуйте снова.');
       }
 
       _player?.positionStream.listen((position) {
-        if (mounted) {
-          setState(() => _position = position);
+        if (mounted && !_isAudioSeeking) {
+          setState(() {
+            _position = position;
+          });
+          print('Current position: ${position.inSeconds} seconds');
         }
       });
 
       _player?.durationStream.listen((duration) {
         if (mounted && duration != null) {
-          setState(() => _duration = duration);
+          setState(() {
+            _duration = duration;
+          });
+          print('Updated duration: ${duration.inSeconds} seconds');
         }
       });
 
       _player?.playerStateStream.listen((state) {
         if (mounted) {
-          setState(() => _isPlaying = state.playing);
+          setState(() {
+            _isPlaying = state.playing;
+            if (state.processingState == ProcessingState.completed) {
+              _isPlaying = false;
+              _position = Duration.zero;
+            }
+          });
         }
       }, onError: (error) {
         print('Player state error: $error');
@@ -108,19 +134,144 @@ class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
         }
       });
 
+      setState(() => _isLoading = false);
     } catch (e) {
       print('Audio player error: $e');
-      setState(() => _errorMessage = e.toString());
-    } finally {
       if (mounted) {
-        setState(() => _isLoading = false);
+        setState(() {
+          _errorMessage = e.toString();
+          _isLoading = false;
+        });
       }
+    }
+  }
+
+  void _initVideoPlayer() async {
+    if (!widget.conversation.isVideo) return;
+
+    try {
+      final authHeaders = await widget.driveService.getAuthHeaders();
+      if (authHeaders == null) {
+        throw Exception('Не удалось получить заголовки авторизации');
+      }
+
+      _controller = VideoPlayerController.network(
+        widget.conversation.videoUrl,
+        httpHeaders: {
+          ...authHeaders,
+          'Accept': '*/*',
+          'Range': 'bytes=0-',
+        },
+      );
+      
+      await _controller!.initialize();
+      _controller!.addListener(_videoListener);
+      
+      setState(() {});
+    } catch (e) {
+      print('Error initializing video player: $e');
+      setState(() {
+        _errorMessage = 'Не удалось загрузить видео: ${e.toString()}';
+      });
+    }
+  }
+
+  void _videoListener() {
+    if (!mounted || _controller == null) return;
+    
+    setState(() {
+      _isVideoPlaying = _controller!.value.isPlaying;
+      if (!_isSeeking) {
+        _position = _controller!.value.position;
+      }
+      _isPlaying = _controller!.value.isPlaying;
+    });
+  }
+
+  void _playPause() async {
+    if (widget.conversation.isVideo) {
+      if (_controller == null) return;
+      
+      if (_controller!.value.isPlaying) {
+        await _controller!.pause();
+      } else {
+        await _controller!.play();
+      }
+      setState(() {
+        _isVideoPlaying = !_controller!.value.isPlaying;
+        _isPlaying = _controller!.value.isPlaying;
+      });
+      return;
+    }
+
+    try {
+      if (_isPlaying) {
+        await _player?.pause();
+      } else {
+        // Если мы в конце трека, начинаем сначала
+        if (_position >= _duration) {
+          await _player?.seek(Duration.zero);
+          setState(() {
+            _position = Duration.zero;
+          });
+        }
+        await _player?.play();
+      }
+      setState(() {
+        _isPlaying = !_isPlaying;
+      });
+    } catch (e) {
+      print('Error playing/pausing: $e');
+    }
+  }
+
+  Future<void> _seekAudio(Duration position) async {
+    if (_player == null) return;
+    if (_duration == Duration.zero) return;
+
+    try {
+      // Останавливаем воспроизведение на время перемотки
+      final wasPlaying = _isPlaying;
+      await _player?.pause();
+
+      // Проверяем, что позиция не выходит за пределы
+      final validPosition = position.inMilliseconds.clamp(0, _duration.inMilliseconds);
+      final targetPosition = Duration(milliseconds: validPosition);
+
+      print('Seeking to position: ${targetPosition.inSeconds}/${_duration.inSeconds} seconds');
+
+      // Делаем перемотку
+      await _player?.seek(targetPosition);
+
+      // Ждем немного, чтобы перемотка успела выполниться
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // Возобновляем воспроизведение, если оно было активно
+      if (wasPlaying) {
+        await _player?.play();
+      }
+
+      setState(() {
+        _position = targetPosition;
+      });
+    } catch (e) {
+      print('Error seeking: $e');
+      // В случае ошибки пытаемся восстановить плеер
+      await _player?.seek(Duration.zero);
+      setState(() {
+        _position = Duration.zero;
+        _isPlaying = false;
+      });
     }
   }
 
   @override
   void dispose() {
     _player?.dispose();
+    if (widget.conversation.isVideo && _controller != null) {
+      _controller!.removeListener(_videoListener);
+      _controller!.dispose();
+    }
     super.dispose();
   }
 
@@ -133,12 +284,8 @@ class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
   }
 
   String _formatDateTime(DateTime dateTime) {
-    final day = dateTime.day.toString().padLeft(2, '0');
-    final month = dateTime.month.toString().padLeft(2, '0');
-    final year = dateTime.year;
-    final hour = dateTime.hour.toString().padLeft(2, '0');
-    final minute = dateTime.minute.toString().padLeft(2, '0');
-    return '$day.$month.$year $hour:$minute';
+    final localTime = dateTime.toLocal();
+    return '${localTime.day.toString().padLeft(2, '0')}.${localTime.month.toString().padLeft(2, '0')}.${localTime.year} ${localTime.hour.toString().padLeft(2, '0')}:${localTime.minute.toString().padLeft(2, '0')}';
   }
 
   @override
@@ -147,232 +294,188 @@ class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
       backgroundColor: const Color(0xFF0D162D),
       appBar: AppBar(
         backgroundColor: const Color(0xFF1A2157),
-        title: const Text('Просмотр записи', style: TextStyle(color: Colors.white)),
-        elevation: 0,
+        title: Text(
+          widget.conversation.title,
+          style: const TextStyle(color: Colors.white),
+        ),
+        iconTheme: const IconThemeData(color: Colors.white),
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Card(
-              color: const Color(0xFF1A2157),
-              child: Padding(
-                padding: const EdgeInsets.all(12.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Text(
-                      widget.conversation.title,
-                      style: const TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Card(
+                color: const Color(0xFF1A2157),
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Информация',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Создано: ${_formatDateTime(widget.conversation.createdAt)}',
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ],
+                      const SizedBox(height: 16),
+                      _buildInfoRow('Название', widget.conversation.title),
+                      const SizedBox(height: 8),
+                      _buildInfoRow('Дата создания', _formatDateTime(widget.conversation.createdAt)),
+                      const SizedBox(height: 8),
+                      _buildInfoRow('Размер', widget.conversation.formattedSize),
+                      const SizedBox(height: 8),
+                      _buildInfoRow('Тип', widget.conversation.isVideo ? 'Видео' : 'Аудио'),
+                    ],
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(height: 8),
-            Card(
-              color: const Color(0xFF1A2157),
-              child: Padding(
-                padding: const EdgeInsets.all(12.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Аудиозапись',
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
+              const SizedBox(height: 16),
+              Card(
+                color: const Color(0xFF1A2157),
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Плеер',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    if (_isLoading)
-                      const Center(
-                        child: Column(
-                          children: [
-                            CircularProgressIndicator(
-                              valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
-                            ),
-                            SizedBox(height: 16),
-                            Text(
-                              'Загрузка аудио...',
-                              style: TextStyle(color: Colors.white70),
-                            ),
-                          ],
+                      const SizedBox(height: 16),
+                      if (widget.conversation.isVideo && _controller != null)
+                        AspectRatio(
+                          aspectRatio: 16 / 9,
+                          child: VideoPlayer(_controller!),
+                        )
+                      else if (widget.conversation.isVideo)
+                        const Center(
+                          child: CircularProgressIndicator(),
                         ),
-                      )
-                    else if (_errorMessage != null)
-                      Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
+                      const SizedBox(height: 16),
+                      if (_isLoading)
+                        const Center(
+                          child: CircularProgressIndicator(),
+                        )
+                      else if (_errorMessage != null)
+                        Center(
+                          child: Text(
+                            _errorMessage!,
+                            style: const TextStyle(color: Colors.red),
+                            textAlign: TextAlign.center,
+                          ),
+                        )
+                      else
+                        Column(
                           children: [
-                            const Icon(
-                              Icons.error_outline,
-                              color: Colors.red,
-                              size: 48,
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              _errorMessage!,
-                              style: const TextStyle(color: Colors.red),
-                              textAlign: TextAlign.center,
-                            ),
-                            const SizedBox(height: 16),
-                            ElevatedButton.icon(
-                              onPressed: _initAudioPlayer,
-                              icon: const Icon(Icons.refresh),
-                              label: const Text('Повторить попытку'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.blue,
+                            if (widget.conversation.isVideo && _controller != null)
+                              Column(
+                                children: [
+                                  Slider(
+                                    value: _position.inMilliseconds.toDouble(),
+                                    min: 0,
+                                    max: _controller!.value.duration.inMilliseconds.toDouble(),
+                                    onChanged: (double newValue) {
+                                      setState(() {
+                                        _isSeeking = true;
+                                        _position = Duration(milliseconds: newValue.toInt());
+                                      });
+                                      _controller!.seekTo(_position);
+                                    },
+                                    onChangeEnd: (double newValue) async {
+                                      setState(() {
+                                        _isSeeking = false;
+                                      });
+                                      if (_isVideoPlaying) {
+                                        await _controller!.play();
+                                      }
+                                    },
+                                  ),
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                                    child: Row(
+                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        Text(
+                                          _formatDuration(_position),
+                                          style: const TextStyle(color: Colors.white70, fontSize: 12),
+                                        ),
+                                        Text(
+                                          _formatDuration(_controller!.value.duration),
+                                          style: const TextStyle(color: Colors.white70, fontSize: 12),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              )
+                            else if (!widget.conversation.isVideo)
+                              AudioProgressBar(
+                                progress: _position,
+                                total: _duration,
+                                onSeek: _seekAudio,
                               ),
-                            ),
-                          ],
-                        ),
-                      )
-                    else
-                      Column(
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text(
-                                _formatDuration(_position),
-                                style: const TextStyle(color: Colors.white70),
-                              ),
-                              Text(
-                                _formatDuration(_duration),
-                                style: const TextStyle(color: Colors.white70),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          AudioProgressBar(
-                            progress: _position,
-                            total: _duration,
-                            onSeek: (position) {
-                              _player?.seek(position);
-                            },
-                          ),
-                          const SizedBox(height: 8),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              IconButton(
-                                icon: Icon(
-                                  _isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
-                                  color: Colors.blue,
-                                  size: 48,
+                            const SizedBox(height: 8),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                IconButton(
+                                  icon: Icon(
+                                    widget.conversation.isVideo
+                                        ? (_controller?.value.isPlaying ?? false
+                                            ? Icons.pause
+                                            : Icons.play_arrow)
+                                        : (_isPlaying
+                                            ? Icons.pause_circle_filled
+                                            : Icons.play_circle_filled),
+                                    color: Colors.white,
+                                    size: widget.conversation.isVideo ? 24 : 48,
+                                  ),
+                                  onPressed: _playPause,
                                 ),
-                                onPressed: () {
-                                  if (_isPlaying) {
-                                    _player?.pause();
-                                  } else {
-                                    _player?.play();
-                                  }
-                                },
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                  ],
-                ),
-              ),
-            ),
-            if (widget.conversation.summary != null) ...[
-              const SizedBox(height: 8),
-              Card(
-                color: const Color(0xFF1A2157),
-                child: Padding(
-                  padding: const EdgeInsets.all(12.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Краткое содержание',
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
+                              ],
+                            ),
+                          ],
                         ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        widget.conversation.summary!,
-                        style: const TextStyle(color: Colors.white70),
-                      ),
                     ],
                   ),
                 ),
               ),
             ],
-            if (widget.conversation.responsibilities != null) ...[
-              const SizedBox(height: 8),
-              Card(
-                color: const Color(0xFF1A2157),
-                child: Padding(
-                  padding: const EdgeInsets.all(12.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Обязанности',
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        widget.conversation.responsibilities!,
-                        style: const TextStyle(color: Colors.white70),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-            if (widget.conversation.transcript != null) ...[
-              const SizedBox(height: 8),
-              Card(
-                color: const Color(0xFF1A2157),
-                child: Padding(
-                  padding: const EdgeInsets.all(12.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Расшифровка',
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        widget.conversation.transcript!,
-                        style: const TextStyle(color: Colors.white70),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ],
+          ),
         ),
       ),
+    );
+  }
+
+  Widget _buildInfoRow(String label, String value) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 100,
+          child: Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white70,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            style: const TextStyle(color: Colors.white70),
+          ),
+        ),
+      ],
     );
   }
 }

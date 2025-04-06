@@ -93,7 +93,8 @@ class _AddConversationScreenState extends State<AddConversationScreen> {
 
   Future<void> _selectFile() async {
     final result = await FilePicker.platform.pickFiles(
-      type: FileType.audio,
+      type: FileType.custom,
+      allowedExtensions: ['mp3', 'wav', 'aac', 'm4a', 'mp4', 'mov', 'avi'],
       allowMultiple: false,
     );
 
@@ -103,6 +104,10 @@ class _AddConversationScreenState extends State<AddConversationScreen> {
 
     final file = File(result.files.first.path!);
     final fileSize = await file.length();
+    final fileName = result.files.first.name.toLowerCase();
+    final isVideo = fileName.endsWith('.mp4') || 
+                    fileName.endsWith('.mov') || 
+                    fileName.endsWith('.avi');
     
     setState(() {
       _selectedFile = file;
@@ -111,21 +116,23 @@ class _AddConversationScreenState extends State<AddConversationScreen> {
       _errorMessage = null;
     });
 
-    // Проверяем длительность аудио
-    final player = AudioPlayer();
-    try {
-      await player.setFilePath(file.path);
-      final duration = await player.duration;
-      
-      if (mounted) {
-        setState(() => _selectedFileDuration = duration);
+    // Проверяем длительность только для аудио файлов
+    if (!isVideo) {
+      final player = AudioPlayer();
+      try {
+        await player.setFilePath(file.path);
+        final duration = await player.duration;
+        
+        if (mounted) {
+          setState(() => _selectedFileDuration = duration);
+        }
+      } catch (e) {
+        if (mounted) {
+          setState(() => _errorMessage = 'Ошибка при чтении аудио файла: $e');
+        }
+      } finally {
+        await player.dispose();
       }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _errorMessage = 'Ошибка при чтении аудио файла: $e');
-      }
-    } finally {
-      await player.dispose();
     }
   }
 
@@ -339,12 +346,18 @@ class _AddConversationScreenState extends State<AddConversationScreen> {
                 ],
                 ElevatedButton.icon(
                   onPressed: _selectFile,
-                  icon: const Icon(Icons.audio_file),
-                  label: const Text('Выбрать аудиофайл'),
-                style: ElevatedButton.styleFrom(
+                  icon: const Icon(Icons.upload_file),
+                  label: const Text('Выбрать файл'),
+                  style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.blue,
                     padding: const EdgeInsets.symmetric(vertical: 16),
                   ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Поддерживаемые форматы:\nАудио: MP3, WAV, AAC, M4A\nВидео: MP4, MOV, AVI',
+                  style: TextStyle(color: Colors.white70, fontSize: 12),
+                  textAlign: TextAlign.center,
                 ),
                 if (_selectedFile != null) ...[
                   const SizedBox(height: 16),

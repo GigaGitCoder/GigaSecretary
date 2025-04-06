@@ -1,10 +1,10 @@
 name: giga_secretary
 description: "A new Flutter project."
 publish_to: 'none'
-version: 0.1.0
+version: 1.0.0+1
 
 environment:
-  sdk: '>=3.0.0 <4.0.0'
+  sdk: '>=3.2.3 <4.0.0'
 
 dependencies:
   flutter:
@@ -13,11 +13,14 @@ dependencies:
   just_audio: ^0.9.36
   audio_session: ^0.1.18
   file_picker: ^8.1.2
-  googleapis: ^11.4.0
+  googleapis: ^11.3.0
   googleapis_auth: ^1.4.1
   google_sign_in: ^6.1.6
   shared_preferences: ^2.2.2
   flutter_svg: ^2.0.9
+  cupertino_icons: ^1.0.2
+  audioplayers: ^5.2.1
+  video_player: ^2.8.2
 
 dev_dependencies:
   flutter_test:

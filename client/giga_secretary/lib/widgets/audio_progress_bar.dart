@@ -27,78 +27,86 @@ class _AudioProgressBarState extends State<AudioProgressBar> {
   }
 
   @override
+  void didUpdateWidget(AudioProgressBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!_isDragging) {
+      _dragValue = widget.progress.inMilliseconds.toDouble();
+    }
+  }
+
+  double _validateValue(double value) {
+    if (widget.total.inMilliseconds == 0) return 0;
+    return value.clamp(0, widget.total.inMilliseconds.toDouble());
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        return GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onHorizontalDragStart: (details) {
-            _isDragging = true;
-            _dragValue = widget.progress.inMilliseconds.toDouble();
-          },
-          onHorizontalDragUpdate: (details) {
-            final width = constraints.maxWidth;
-            final dx = details.localPosition.dx;
-            final percent = dx / width;
-            
-            _dragValue = (widget.total.inMilliseconds.toDouble() * percent)
-                .clamp(0.0, widget.total.inMilliseconds.toDouble());
-            
-            setState(() {});
-          },
-          onHorizontalDragEnd: (details) {
-            widget.onSeek(Duration(milliseconds: _dragValue.toInt()));
-            _isDragging = false;
-          },
-          onTapDown: (details) {
-            final width = constraints.maxWidth;
-            final dx = details.localPosition.dx;
-            final percent = dx / width;
-            
-            final position = Duration(
-              milliseconds: (widget.total.inMilliseconds * percent).toInt(),
-            );
-            widget.onSeek(position);
-          },
-          child: Stack(
+    if (widget.total == Duration.zero) {
+      return const SizedBox.shrink();
+    }
+
+    final currentValue = _isDragging ? _dragValue : widget.progress.inMilliseconds.toDouble();
+    final validatedValue = _validateValue(currentValue);
+    final maxDuration = widget.total.inMilliseconds.toDouble();
+
+    return Column(
+      children: [
+        SliderTheme(
+          data: SliderTheme.of(context).copyWith(
+            activeTrackColor: Colors.white,
+            inactiveTrackColor: Colors.white30,
+            thumbColor: Colors.white,
+            overlayColor: Colors.white.withOpacity(0.1),
+            trackHeight: 4.0,
+          ),
+          child: Slider(
+            value: validatedValue,
+            min: 0,
+            max: maxDuration,
+            onChangeStart: (_) {
+              setState(() {
+                _isDragging = true;
+                _dragValue = validatedValue;
+              });
+            },
+            onChanged: (value) {
+              setState(() {
+                _dragValue = _validateValue(value);
+              });
+            },
+            onChangeEnd: (value) {
+              final targetPosition = Duration(milliseconds: _validateValue(value).toInt());
+              widget.onSeek(targetPosition);
+              setState(() {
+                _isDragging = false;
+              });
+            },
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16.0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Container(
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.grey[300],
-                  borderRadius: BorderRadius.circular(2),
-                ),
+              Text(
+                _formatDuration(Duration(milliseconds: validatedValue.toInt())),
+                style: const TextStyle(color: Colors.white70, fontSize: 12),
               ),
-              FractionallySizedBox(
-                widthFactor: _isDragging
-                    ? _dragValue / widget.total.inMilliseconds
-                    : widget.progress.inMilliseconds / widget.total.inMilliseconds,
-                child: Container(
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).primaryColor,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              Positioned(
-                left: _isDragging
-                    ? (_dragValue / widget.total.inMilliseconds) * constraints.maxWidth - 6
-                    : (widget.progress.inMilliseconds / widget.total.inMilliseconds) * constraints.maxWidth - 6,
-                top: -4,
-                child: Container(
-                  width: 12,
-                  height: 12,
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).primaryColor,
-                    shape: BoxShape.circle,
-                  ),
-                ),
+              Text(
+                _formatDuration(widget.total),
+                style: const TextStyle(color: Colors.white70, fontSize: 12),
               ),
             ],
           ),
-        );
-      },
+        ),
+      ],
     );
+  }
+
+  String _formatDuration(Duration duration) {
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    final minutes = twoDigits(duration.inMinutes.remainder(60));
+    final seconds = twoDigits(duration.inSeconds.remainder(60));
+    return '$minutes:$seconds';
   }
 } 

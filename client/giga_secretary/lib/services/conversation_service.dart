@@ -18,42 +18,41 @@ class ConversationService {
   ConversationService(this._driveService);
   
   Future<List<Conversation>> getConversations() async {
+    if (_driveService.driveApi == null) {
+      throw Exception('Drive API не инициализирован');
+    }
+
+    final folderId = await _driveService.getSelectedFolderId();
+    if (folderId == null) {
+      throw Exception('Папка не выбрана');
+    }
+
     try {
-      // Получаем список файлов с Google Drive с дополнительными полями
-      final driveFiles = await _driveService.listFilesWithDetails();
-      
-      // Очищаем текущий список
-      _conversations.clear();
-      
-      // Создаем записи на основе файлов с диска
-      for (final file in driveFiles) {
-        if (file.id != null && file.name != null && file.createdTime != null) {
-          // Отладочный вывод для проверки времени
-          print('File: ${file.name}');
-          print('UTC time: ${file.createdTime}');
-          
-          // Используем UTC время и преобразуем его в локальное
-          final utcTime = DateTime.parse(file.createdTime!.toIso8601String());
-          final localTime = utcTime.toLocal();
-          
-          print('Local time: $localTime');
-          
-          _conversations.add(Conversation(
-            id: file.id!,
-            title: file.name!.replaceAll('.mp3', ''),
-            fileId: file.id!,
-            createdAt: localTime,
-          ));
-        }
-      }
-      
-      // Сортируем записи по дате создания (новые сверху)
-      _conversations.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-      
-      return _conversations;
+      final files = await _driveService.driveApi!.files.list(
+        q: "('$folderId' in parents) and (mimeType contains 'audio/' or mimeType contains 'video/') and trashed=false",
+        spaces: 'drive',
+        $fields: 'files(id,name,createdTime,size,mimeType)',
+        orderBy: 'createdTime desc',
+      );
+
+      final conversations = files.files?.map((file) {
+        final createdAt = DateTime.parse(file.createdTime?.toString() ?? '');
+        final isVideo = file.mimeType?.contains('video') ?? false;
+        
+        return Conversation(
+          id: file.id ?? '',
+          title: file.name ?? '',
+          createdAt: createdAt,
+          size: int.tryParse(file.size ?? '0') ?? 0,
+          isVideo: isVideo,
+          fileId: file.id ?? '',
+        );
+      }).toList() ?? [];
+
+      return Future.value(conversations);
     } catch (e) {
       print('Error loading conversations: $e');
-      return _conversations;
+      rethrow;
     }
   }
 
@@ -69,7 +68,7 @@ class ConversationService {
   }
   
   Future<void> saveConversation(
-    File audioFile,
+    File file,
     String title, {
     Function(double)? onProgress,
   }) async {
@@ -78,32 +77,39 @@ class ConversationService {
       throw Exception('Запись с таким названием уже существует');
     }
 
-    final fileSize = await audioFile.length();
+    final fileSize = await file.length();
+    final fileName = file.path.toLowerCase();
+    final isVideo = fileName.endsWith('.mp4') || 
+                    fileName.endsWith('.mov') || 
+                    fileName.endsWith('.avi');
     
     // Проверяем размер файла
     if (fileSize > _maxFileSizeBytes) {
       throw Exception('Файл слишком большой. Максимальный размер: 2 ГБ');
     }
 
-    // Проверяем длительность аудио
-    final player = AudioPlayer();
-    try {
-      await player.setFilePath(audioFile.path);
-      final duration = await player.duration;
-      
-      if (duration == null) {
-        throw Exception('Не удалось определить длительность аудио');
+    // Проверяем длительность только для аудио файлов
+    if (!isVideo) {
+      final player = AudioPlayer();
+      try {
+        await player.setFilePath(file.path);
+        final duration = await player.duration;
+        
+        if (duration == null) {
+          throw Exception('Не удалось определить длительность аудио');
+        }
+        
+        if (duration > _maxDuration) {
+          throw Exception('Аудио слишком длинное. Максимальная длительность: 10 минут');
+        }
+      } finally {
+        await player.dispose();
       }
-      
-      if (duration > _maxDuration) {
-        throw Exception('Аудио слишком длинное. Максимальная длительность: 10 минут');
-      }
-    } finally {
-      await player.dispose();
     }
 
-    final fileName = '$title.mp3';
-    final fileStream = audioFile.openRead();
+    final extension = path.extension(file.path).toLowerCase();
+    final outputFileName = '$title$extension';
+    final fileStream = file.openRead();
     final streamController = StreamController<List<int>>();
     
     var bytesUploaded = 0;
@@ -129,8 +135,8 @@ class ConversationService {
 
       // Загружаем файл
       fileId = await _driveService.uploadFile(
-        audioFile,
-        fileName,
+        file,
+        outputFileName,
         fileStream: streamController.stream,
         fileSize: fileSize,
       );
