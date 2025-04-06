@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+whisper
+torch
+pyannote.audio
+pydub
+python-multipart
+python-dotenv
